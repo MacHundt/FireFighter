@@ -13,7 +13,12 @@ import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
-import java.io.File;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.ProtocolException;
+import java.net.URL;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -35,6 +40,8 @@ import javax.swing.SwingUtilities;
 import javax.swing.border.LineBorder;
 
 import org.jfree.chart.ChartPanel;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.openstreetmap.gui.jmapviewer.Coordinate;
 import org.openstreetmap.gui.jmapviewer.JMapViewer;
 import org.openstreetmap.gui.jmapviewer.OsmTileLoader;
@@ -47,7 +54,6 @@ import org.openstreetmap.gui.jmapviewer.interfaces.TileSource;
 import org.openstreetmap.gui.jmapviewer.tilesources.OsmTileSource;
 
 import controller.Starter;
-import de.cm.osm2po.routing.Graph;
 import model.database.DBConnection;
 import model.datatypes.DistanceCalculator;
 import model.datatypes.Hose;
@@ -68,7 +74,7 @@ import view.chart.Chart;
 * @author Jan Peter Stotz
 *
 */
-public class Osmmap extends JFrame implements JMapViewerEventListener  {
+public class Osmmap_webservice extends JFrame implements JMapViewerEventListener  {
 
 	private static final long serialVersionUID = 1L;
 	
@@ -87,7 +93,7 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	private List<HoseLine> hoseLines;
 	
 //	private Integer[] proposedHoselines = new Integer[]{0,1,2};
-	private Integer[] proposedHoselines = new Integer[]{0,1};
+	private Integer[] proposedHoselines = new Integer[]{0,1,2};
 	private HoseLine selectedHoseLine;
 	private Way selectedWay;
 	
@@ -105,8 +111,6 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	private ChartPanel chartPanel;
 	private Chart elevationChart;
 	
-	private File graphFile;
-	private Graph graph;
 	
 	private boolean changed = false;
 	
@@ -116,7 +120,7 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	 * Constructs the {@code OsmMap}.
 	 * @param type - database type (local or biggis server)
 	 */
-	public Osmmap(String type) {
+	public Osmmap_webservice(String type) {
 		super("Fire Fighter Tool");
 		
 		TYPE = type;
@@ -439,24 +443,18 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	private void displayAllHydrants() {
 		try {
 			PreparedStatement st = null;
-			if (TYPE.equals(Starter.Type.LOCAL.name())) {
-				st = DBConnection.getConnection(TYPE, false).prepareStatement("SELECT h.hydrant_node, st_astext(n.geom), e.height "
-					+ "FROM \"hydrantsToWayPoints\" as h, nodes n, elevation e "
-					+ "where h.hydrant_node = n.id and e.node_id = h.hydrant_node;");
-			}
-		
-			// 47.76035, 8.97  Buffer this point
-//			PreparedStatement st = DBConnection.getConnection(Starter.Type.BIGGIS.name()).prepareStatement("SELECT h.id, st_astext(h.geom), h.height "
-//					+ "FROM \"de_hydrants\" as h Limit 400;");
-			
-			
-			// 20 km Buffer around point of Liggeringen 
-			else if (TYPE.equals(Starter.Type.BIGGIS.name())) {
+			// 20 km Buffer around point of Liggeringen  
+			//TODO !!! Interactive Buffer !!!
+			if (TYPE.equals(Starter.Type.BIGGIS.name())) {
 				Connection c = DBConnection.getConnection(TYPE, true);
 				st = c.prepareStatement("Select h.id,  st_astext(h.geom), h.height"
 					+ " From (Select * from de_hydrants ) as h, "
 					+ "(SELECT ST_Buffer(ST_SetSRID(ST_MakePoint(8.97, 47.76035), 4326)::geography, 20000)::geometry as geom) as buffer "
 					+ "Where ST_Contains(buffer.geom, h.geom);");
+				
+//				st = c.prepareStatement("Select h.id,  st_astext(h.geom), h.height"
+//						+ " From de_hydrants as h "
+//						);
 			}
 			else {
 				System.out.println("Hydrants Statement --> NULL POINTER \t TYPE:"+TYPE);
@@ -473,7 +471,6 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 			}
 			rs.close();
 			st.close();
-			
 			
 		} catch (SQLException e) {
 			// TODO Auto-generated catch block
@@ -717,17 +714,7 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	private Hydrant findNearestHydrant(Coordinate coordintes) {
 		try {
 			PreparedStatement st = null;
-			if (TYPE.equals(Starter.Type.LOCAL.name())) {
-				st= DBConnection.getConnection(TYPE, false).prepareStatement("SELECT h.hydrant_node, st_astext(n.geom), "
-					+ "st_distance_sphere(n.geom, st_geomfromtext('POINT("+coordintes.getLon()+" "+coordintes.getLat()+")')) as dist, e.height, "
-							+ "n.tags "
-					+ "FROM \"hydrantsToWayPoints\" as h, nodes n, elevation e "
-					+ "where n.id = h.hydrant_node and n.id = e.node_id "
-					+ "order by dist asc "
-					+ "limit 1;");
-			}
-			
-			else if (TYPE.equals(Starter.Type.BIGGIS.name())) {
+			if (TYPE.equals(Starter.Type.BIGGIS.name())) {
 //				st = DBConnection.getConnection(TYPE, false).prepareStatement(""
 //					+ "SELECT h.hydrant_id, st_astext(n.way), "
 //					+ "st_distance_sphere(n.way, st_geomfromtext('POINT("+coordintes.getLon()+" "+coordintes.getLat()+")')) as dist, "
@@ -744,6 +731,7 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 						+ "FROM de_hydrants as v "
 						+ "ORDER BY v.geom <-> st_setsrid(st_geomfromtext('POINT("+coordintes.getLon()+" "+coordintes.getLat()+")'), 4326) "
 						+ "LIMIT 1;");
+				
 			}
 			else {
 				System.out.println("Find nearest Hydrant Statement --> NULL POINTER \t TYPE:"+TYPE);
@@ -818,7 +806,9 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 		int numberOfHosesPump = 0;
 		
 		//add incidentscene
-		WaySegment toIncidentscene = new WaySegment(waySegments.get(0).getEnd(), new WayNode(2222222, scene.getCoordinate(), waySegments.get(0).getEnd().getElevation()));
+//		WaySegment toIncidentscene = new WaySegment(waySegments.get(0).getEnd(), new WayNode(2222222, scene.getCoordinate(), waySegments.get(0).getEnd().getElevation()));
+		WaySegment toIncidentscene = new WaySegment(waySegments.get(0).getEnd(), new WayNode(-1, scene.getCoordinate(), waySegments.get(0).getEnd().getElevation()));
+
 		waySegments.add(0, toIncidentscene);
 		
 		double totalLength = 0;
@@ -893,87 +883,108 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 		return new HoseLine(hoses, pumps);
 	}
 	
-//	private static ResultSet getNearestNHydrants(Connection con, int n) throws SQLException {
-//		
-//		String nearest_query = "SELECT h.id, cjl.way_id, cjl.osm_id, cjl.seq_id, cjl.distance, st_astext(h.geom), st_astext(cjl.way)"
-//				+ "FROM de_hydrants as h "
-//				+ "CROSS JOIN LATERAL ( "
-//				+ "SELECT p.way_id, p.point_id as osm_id, p.seq_id, "
-//				+ "ST_Distance(h.geom::geography, p.way::geography) as distance, p.way "
-//				+ "FROM de_way_points as p "
-//				+ "ORDER BY p.way <-> h.geom "
-//				+ "LIMIT 1 "
-//				+ ") cjl "
-//				+ "WHERE h.id = " +hydrant_id+";";
-//		
-//		
-//
-//
-//		PreparedStatement sta = con.prepareStatement(nearest_query);
-//		ResultSet rs_nearest = sta.executeQuery();
-//		return rs_nearest;
-//		
-//	}
+	
+	private long getNearestVertex(double lon, double lat) {
+		long id = -1;
+		String url = "http://localhost:8888/Osm2poService/?cmd=fv&lat="+lat+"&lon="+lon+"&format=geojson";
+		try {
+			URL obj = new URL(url);
+			HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+
+			// optional default is GET
+			con.setRequestMethod("GET");
+			//add request header
+//			con.setRequestProperty("User-Agent", USER_AGENT);
+
+			int responseCode = con.getResponseCode();
+//			System.out.println("\nSending 'GET' request to URL : " + url);
+//			System.out.println("Response Code : " + responseCode);
+			
+			BufferedReader in = new BufferedReader(
+			        new InputStreamReader(con.getInputStream()));
+			String inputLine;
+			StringBuffer response = new StringBuffer();
+
+			while ((inputLine = in.readLine()) != null) {
+				response.append(inputLine);
+			}
+			in.close();
+
+			//print result
+//			System.out.println(response.toString());
+			JSONObject jobj = new JSONObject(response.toString());
+			JSONObject res = jobj.getJSONObject("properties");
+			id = res.getInt("id");
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+//		System.out.println("Point("+lon+" "+lat+")  --> VertexID: "+id);
+		
+		return id;
+	}
+	
+	
+	private String getRoute(long source, long target) {
+		String url = "http://localhost:8888/Osm2poService/?cmd=fr&source="+source+"&target="+target+"&findShortestPath=true&format=geojson";
+		
+		String route = "LINESTRING(";
+		// optional default is GET
+		try {
+			URL obj = new URL(url);
+			HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+			con.setRequestMethod("GET");
+			//add request header
+			
+			int responseCode = con.getResponseCode();
+//			System.out.println("\nSending 'GET' request to URL : " + url);
+//			System.out.println("Response Code : " + responseCode);
+			
+			BufferedReader in = new BufferedReader(
+					new InputStreamReader(con.getInputStream()));
+			String inputLine;
+			StringBuffer response = new StringBuffer();
+			
+			while ((inputLine = in.readLine()) != null) {
+				response.append(inputLine);
+			}
+			in.close();
+			if (response.toString().startsWith("#"))
+				return "";
+			JSONObject jobj = new JSONObject(response.toString());
+			JSONArray farr = jobj.getJSONArray("features");
+			
+			for (int i = 0; i < farr.length(); i++) {
+				JSONObject geometry = farr.getJSONObject(i).getJSONObject("geometry");
+				JSONArray linestring = geometry.getJSONArray("coordinates");
+				for (int j = 0; j < linestring.length(); j++) {
+					JSONArray points = linestring.getJSONArray(j);
+					double lon = (double)points.get(0);
+					double lat = (double)points.get(1);
+					route += lon+" "+lat+",";
+				}
+				
+			}
+			route = route.substring(0, route.length()-1)+")";
+			
+		} catch (ProtocolException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		return route;
+	}
+	
 
 	// get paths to nearest 100 hydrants
 	private List<Way> getPathToHydrants(long start) {
  		List<Way> paths = new ArrayList<Way>();
- 		
  		try {
- 			PreparedStatement st = null;
-			if (TYPE.equals(Starter.Type.LOCAL.name())) {
-				 st = DBConnection.getConnection(TYPE, false).prepareStatement("SELECT id1, id2, cost, e.height, st_astext(n.geom) "
-							+ "FROM pgr_kdijkstraPath('"
-							+ "SELECT id::int4, "
-								+ "\"from\"::int4 as source,\"to\"::int4 as target,distance::double precision AS cost "
-								+ "FROM edges',"
-							+ start+", array("
-									+ "SELECT way_node from ("
-									+ "SELECT distinct way_node, st_distance_sphere(n.geom, w.geom) "
-									+ "from \"hydrantsToWayPoints\" h, nodes n, nodes w, edges e "
-									+ "WHERE w.id = h.way_node and n.id = "+start+" and h.way_node = e.\"from\" "
-									+ "ORDER BY st_distance_sphere(n.geom, w.geom)"
-									+ ") as a "
-									+ "Limit 100"
-							+ ")::int[],true,false), elevation e, nodes n "
-							+ "WHERE id2 = e.node_id and id2 = n.id order by seq;");		// id2 = TARGET
-			}
-			
-			else if (TYPE.equals(Starter.Type.BIGGIS.name())) {
-				// TEST dataset
-				// http://docs.pgrouting.org/2.3/en/src/ksp/doc/pgr_ksp.html#pgr-ksp
-				// newest pg_routing --> pgr-ksp()
-				// ---> LIMIT the ResultSet !!  (20 nächsten würde auch reichen)
-//				 st = DBConnection.getConnection(TYPE, false).prepareStatement("SELECT id1, id2, cost, st_astext(n.geom) "
-//							+ "FROM pgr-dijkstra('"
-//							+ "SELECT id, source, target, distance::double precision AS cost FROM de_2po_4pgr',"
-//							+ start+", "+end+" "
-//							+ "),true);");
-				 
-//				 st = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//				 		+ "SELECT id1, id2, cost, st_astext(n.geom_vertex) "
-//						+ "FROM pgr_kdijkstraPath('SELECT id::int4, source::int4 as source,target::int4 as target,cost::double precision AS cost FROM de_2po_4pgr', "
-//						+ "(Select e.source from de_2po_4pgr as e where e.source = 1805503 Limit 1), "
-//						+ "array( Select a.int_id from "
-//						+ "(SELECT v.int_id "
-//						+ "FROM de_hydrants as v, de_2po_vertex as n "
-//						+ "where n.id = 1805503 "
-//						+ "ORDER BY v.geom <-> n.geom_vertex "
-//						+ "LIMIT 50) as a)::int[], "
-//						+ "true, false), de_2po_vertex as n "
-//						+ "WHERE id2 = n.id"
-//						);
-//				
-			}
-//			else {
-//				System.out.println("Find Path to Hydrant Statement --> NULL POINTER \t TYPE:"+TYPE);
-//				return null;
-//			}
- 			
-			// noch ohne height
-			
-			// ############  with local graph file  ###########
-			System.out.println("TEST Routing");
+			System.out.println("Calculate Routes");
 			
 			PreparedStatement height_getter = DBConnection.getConnection(TYPE, true).prepareStatement(""
 					+ "Select ST_Value(rast, ST_SetSRID(st_geomfromtext( ? ) ,4326)) "
@@ -981,106 +992,58 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 					+ "Where ST_Intersects(rast, ST_SetSRID(st_geomfromtext( ?),4326),4326)"
 			);
 			
-			// Get 20 nearest hydrants
-			st = DBConnection.getConnection(TYPE, false).prepareStatement(""
+			String startPoint = "POINT("+scene.getLon()+" "+scene.getLat()+")";
+			// Get 100 nearest hydrants
+			PreparedStatement st = DBConnection.getConnection(TYPE, false).prepareStatement(""
 					+ "Select v.id, st_astext(v.geom), v.height "
-					+ "FROM de_hydrants as v, de_2po_vertex as n "
-					+ "where n.id = "+start+" "
-					+ "ORDER BY v.geom <-> n.geom_vertex "
-					+ "LIMIT 3"
+					+ "FROM de_hydrants as v "
+					+ "ORDER BY v.geom <-> ST_SetSRID(st_geomfromtext('"+startPoint+"'),4326) "
+					+ "LIMIT 20"
 			);
-			// NETWORK Vertices
-//			st = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//					+ "Select v.id, st_astext(v.geom), v.height "
-//					+ "FROM de_hydrants as v, de_2po_4pgr_network_vertices_pgr as n "
-//					+ "where n.id = "+start+" "
-//					+ "ORDER BY v.geom <-> n.the_geom "
-//					+ "LIMIT 3"
-//			);
 			
-			PreparedStatement getclosedVertex = DBConnection.getConnection(TYPE, false).prepareStatement(""
-					+ "SELECT v.id, st_astext(v.geom_vertex) "
-					+ "FROM de_2po_vertex as v "
-					+ "ORDER BY v.geom_vertex <-> st_setsrid(st_geomfromtext(?), 4326) "
-					+ "LIMIT 1;");
-//			PreparedStatement getclosedVertex = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//					+ "SELECT v.id, st_astext(v.the_geom) "
-//					+ "FROM de_2po_4pgr_network_vertices_pgr as v "
-//					+ "ORDER BY v.the_geom <-> st_setsrid(st_geomfromtext(?), 4326) "
-//					+ "LIMIT 1;");
-			
-			
-//			PreparedStatement dijstra = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//					+ "SELECT d.*, st_astext(p.geom_way) as geom, p.osm_name "
-//					+ "FROM pgr_dijkstra('SELECT id, source, target, cost FROM de_2po_4pgr',"+start+", ?, false) as d, de_2po_4pgr as p "
-//					+ "WHERE edge = p.id "
-//					+ "Order by d.seq"
-//					);
-			PreparedStatement dijstra = DBConnection.getConnection(TYPE, false).prepareStatement(""
-					+ "SELECT d.*, st_astext(p.geom_way) as geom "
-					+ "FROM pgr_dijkstra('SELECT id, source, target, st_length(geom_way) as cost FROM de_2po_4pgr_network',"+start+", ?, false) as d, de_2po_4pgr_network as p "
-					+ "WHERE edge = p.id "
-					+ "Order by d.seq"
-					);
-			
-			
-			// load graph in advance
 			ResultSet rs = st.executeQuery();
 			
 			Way way = new Way();
 			List<WayNode> waynodes = new ArrayList<WayNode>();
 			
-			int counter = 1;
+			int way_counter = 1;
+			long node_counter = 0;
 			while(rs.next()) {
 //				DefaultRouter router = new DefaultRouter();
 				long hy_id =  rs.getLong(1);
 				String hydro = rs.getString(2);
-				
-				System.out.println(counter+". nearest Hydro Coord: "+hydro);
-				
+				Coordinate coordi = getCoordinateFromString(hydro);
 				// Get closest Vertex
-				long targetId = -1;
-				getclosedVertex.setString(1, hydro);
+				long targetId = getNearestVertex(coordi.getLon(), coordi.getLat());
 				
-				ResultSet nearestV = getclosedVertex.executeQuery();
-				System.out.println();
-				while (nearestV.next()) {
-					targetId = nearestV.getInt(1);
+//				System.out.println(counter++ +". Hydrant >> ID: "+hy_id+" \n"
+//						+ "Nearest Node >> ID: "+targetId +"\n"
+//						+ "Source Node >> ID: "+start);
+				
+				String route = getRoute(start, targetId);
+				if (route.isEmpty())
+					continue;
+				
+				route = route.replace("LINESTRING(", "");
+				route = route.replace(")", "");
+				String point_concat  = "";
+				String[] points = route.split(",");
+				for (String point : points){
+					String p = "POINT("+point+")";
+					point_concat += p+",";
 				}
-				System.out.println(counter++ +". Hydrant >> ID: "+hy_id+" \n"
-						+ "Nearest Node >> ID: "+targetId +"\n"
-						+ "Source Node >> ID: "+start);
-				
-				dijstra.setLong(1, targetId);
-				ResultSet path = dijstra.executeQuery();
+				System.out.println(way_counter+": "+route);
+				point_concat = point_concat.substring(0, point_concat.length()-1);
 				
 				boolean first_node = false;
 				WayNode first = null;
 				boolean canceled_start = false;
 				
-				String point_concat = "";
+//				System.out.println(point_concat);
+				points = point_concat.split(",");
 				
-				// make point path
-				while (path.next()) {
-//					System.out.println(path.getString(path.findColumn("geom")));
-					String routeSegment = path.getString(path.findColumn("geom"));
-					int segID = path.getInt(path.findColumn("seq"));
-					
-					String c = "";
-					c = routeSegment.replace("LINESTRING(", "");
-					c = c.replace(")", "");
-					String[] points = c.split(",");
-					for (String point : points){
-						String p = "POINT("+point+")";
-						point_concat += p+",";
-					}
-				}
-				point_concat = point_concat.substring(0, point_concat.length()-1);
-				System.out.println(point_concat);
-				String[] points = point_concat.split(",");
-				int c = 0;
 				double height = getHeightFromGeom(points[0], height_getter);
-				first = new WayNode(c, getCoordinateFromString(points[0]), height);
+				first = new WayNode(node_counter++, getCoordinateFromString(points[0]), height);
 				waynodes.add(first);
 				
 				// remove first?
@@ -1089,172 +1052,23 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 //					first = new WayNode(c, getCoordinateFromString(points[i]), height);
 //					waynodes.add(first);
 					height = getHeightFromGeom(points[i], height_getter);
-					WayNode second = new WayNode(c, getCoordinateFromString(points[i]), height);
+					WayNode second = new WayNode(node_counter, getCoordinateFromString(points[i]), height);
 					waynodes.add(second);
 					WaySegment seg = new WaySegment(first, second);
 //					System.out.println("seq:"+c+"  "+points[i-1]+" - "+points[i]+"  h:"+height);
 					way.addWaySegments(seg);
 					first = second;
-					c++;
+					node_counter++;
 				}
 				
-				
-//				
-//				while (path.next()) {
-////					System.out.println(path.getString(path.findColumn("geom")));
-//					String routeSegment = path.getString(path.findColumn("geom"));
-//					int segID = path.getInt(path.findColumn("seq"));
-//					
-//					String c = "";
-//					c = routeSegment.replace("LINESTRING(", "");
-//					c = c.replace(")", "");
-//					String[] points = c.split(",");
-//					String from = "POINT("+points[0]+")";
-//					int height = getHeightFromGeom(from, height_getter);
-//					
-//					int startCount = 0;
-//					
-//					if (!first_node) {
-//						first = new WayNode(segID, getCoordinateFromString(from), height);
-//						waynodes.add(first);
-//						first_node = true;
-//						startCount = 1;
-//					}
-//					
-//					for (int i = startCount; i<points.length; ++i) {
-//						String to = "POINT("+points[i]+")";
-//						height = getHeightFromGeom(to, height_getter);
-//						
-//						WayNode second = new WayNode(segID, getCoordinateFromString(to), height);
-//						waynodes.add(second);
-//						WaySegment seg = new WaySegment(first, second);
-//						way.addWaySegments(seg);
-//						first = second;
-//						// get height
-//					}
-//				}
+				way_counter++;
 				paths.add(way);
 				way = new Way();
 				waynodes =  new ArrayList<WayNode>();
+				
 			}
-				
-				
-//				// Somewhere in Hamburg
-//				int sourceId = graph.findClosestVertexId(48.50f, 8.57f);
-//				int targetId = graph.findClosestVertexId(48.63f, 8.60f);
-//				
-//				// additional params for DefaultRouter
-//				Properties params = new Properties();
-//				params.setProperty("findShortestPath", "true");
-//				params.setProperty("ignoreRestrictions", "false");
-//				params.setProperty("ignoreOneWays", "false");
-//				params.setProperty("heuristicFactor", "1.0"); // 0.0 Dijkstra, 1.0 good A*
-//				
-////				int[] path = router.findPath(
-////						graph, sourceId, targetId, Float.MAX_VALUE, params);
-//				int[] path = router.findPath(
-//						graph, (int)start, targetId, Float.MAX_VALUE, params);
-//				
-//				
-//				PreparedStatement getGeoms = DBConnection.getConnection(TYPE, true).prepareStatement(""
-//						+ "Select n1.id, st_astext(n1.geom_vertex), ST_Value(rast, ST_SetSRID(n1.geom_vertex ,4326)), "
-//						+ "n2.id, st_astext(n2.geom_vertex), ST_Value(rast, ST_SetSRID(n2.geom_vertex ,4326))"
-//						+ "From de_2po_vertex as n1, de_2po_vertex as n2, elevation_srtm90_v4 "
-//						+ "Where n1.id = ? and n2.id = ? "
-//						+ "and ST_Intersects(rast, ST_SetSRID(n1.geom_vertex,4326),4326) "
-//						+ "and ST_Intersects(rast, ST_SetSRID(n2.geom_vertex,4326),4326)"
-//				);
-//				
-//				
-//				
-//				if (path != null) { // Found!
-//					boolean first_node = true;
-//					for (int i = 0; i < path.length; i++) {
-//						RoutingResultSegment rrs = graph.lookupSegment(path[i]);
-//						int segId = rrs.getId();
-//						int from = rrs.getSourceId();
-//						int to = rrs.getTargetId();
-//						String segName = rrs.getName().toString();
-////						System.out.println(from + "-" + to + "  " + segId + "/" + path[i] + " " + segName);
-//						
-////						getGeoms.setInt(1, from);
-////						getGeoms.setInt(2, to);
-////						ResultSet geoms = getGeoms.executeQuery();
-////						while (geoms.next()) {
-////							String first_n = geoms.getString(2);
-////							String second_n = geoms.getString(5);
-////							WayNode first = new WayNode(segId, getCoordinateFromString(geoms.getString(2)), geoms.getInt(3));
-////							if (first_node) {
-////								waynodes.add(first);
-////								first_node = false;
-////							}
-////							
-////							WayNode second = new WayNode(segId, getCoordinateFromString(geoms.getString(5)), geoms.getInt(6));
-////							waynodes.add(second);
-////							WaySegment seg = new WaySegment(first, second);
-////							way.addWaySegments(seg);
-////						}
-//						
-//						LatLon[] geoms = rrs.getLatLons();
-//						String[] way_nodes = new String[geoms.length];
-//						int k = 0;
-//						for (LatLon lt : geoms) {
-//							double longi = lt.getLon();
-//							double lati =  lt.getLat();
-//							String point = "POINT("+longi+" "+lati+")";
-//							way_nodes[k++] = point;
-//						}
-//						
-//						WayNode first = new WayNode(segId, getCoordinateFromString(way_nodes[0]), getHeightFromGeom(way_nodes[0], height_getter));
-////						WayNode first = new WayNode(segId, getCoordinateFromString(way_nodes[0]), 0.0);
-//						waynodes.add(first);
-//						for (int j = 1; j < way_nodes.length; j++) {
-//							WayNode second = new WayNode(segId, getCoordinateFromString(way_nodes[j]),getHeightFromGeom(way_nodes[j], height_getter));
-////							WayNode second = new WayNode(segId, getCoordinateFromString(way_nodes[j]), 0.0);
-//							waynodes.add(second);
-//							// ## other way round -- going back?
-////							WaySegment seg = new WaySegment(waynodes.get(i+1), waynodes.get(i));
-//							WaySegment seg = new WaySegment(first, second);
-//							way.addWaySegments(seg);
-//							first = second;
-//						}
-//					}
-//					paths.add(way);
-//					way = new Way();
-//					waynodes =  new ArrayList<WayNode>();
-//				}
-//				System.out.println("########### ");
-//				
-//			}
-//			graph.close();
-//			
-//			//  ... für das web .. vielleicht sogar am Besten, die API zu nehmen, server service laufen lassen.
-//			
-//			ResultSet rs = st.executeQuery();
-//			
-//			Way way = new Way();
-//			List<WayNode> waynodes = new ArrayList<WayNode>();
-//			while(rs.next()) {
-//				WayNode w1 = new WayNode(rs.getLong(2), getCoordinateFromString(rs.getString(5)), rs.getDouble(4));
-//				waynodes.add(w1);
-//				
-//				// weg zu ende
-//				if (rs.getLong(1) == rs.getLong(2)) {
-//					for (int i = 0; i < waynodes.size() -1; i++) {
-//						WaySegment seg = new WaySegment(waynodes.get(i+1), waynodes.get(i));
-//						way.addWaySegments(seg);
-//					}
-//					
-//					paths.add(way);
-//					way = new Way();
-//					waynodes =  new ArrayList<WayNode>();
-//				}
-//				
-//			}
-			
 			st.close();
 			rs.close();
-			getclosedVertex.close();
 		} catch (SQLException e) {
 			e.printStackTrace();
 		}
@@ -1288,97 +1102,9 @@ public class Osmmap extends JFrame implements JMapViewerEventListener  {
 	}
 	
 	private long getNearestWayPointID(IncidentScene scene) {
-		try {
-			
-			System.out.println("Fire!  Long:"+scene.getLon()+" Lat:"+scene.getLat());
-			
- 			PreparedStatement st = null;
-			if (TYPE.equals(Starter.Type.LOCAL.name())) {
-				st = DBConnection.getConnection(TYPE, false).prepareStatement("SELECT n.id, st_astext(n.geom), "
-						+ "st_distance_sphere(n.geom, st_geomfromtext('POINT("+scene.getLon()+" "+scene.getLat()+")')) as dist "
-						+ "FROM nodes as n, way_nodes as w "
-						+ "where n.id = w.node_id "
-						+ "order by dist "
-						+ "limit 1;");
-			}
-			
-//			else if (TYPE.equals(Starter.Type.BIGGIS.name())) {
-//				// TEST dataset
-//				st = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//						+ "SELECT n.point_id, st_astext(n.way), "
-//						+ "st_distance_sphere(n.way, st_geomfromtext('POINT("+scene.getLon()+" "+scene.getLat()+")')) as dist, n.way_id "
-//						+ "FROM de_way_points_test as n "
-//						+ "ORDER BY dist "
-//						+ "LIMIT 1;");
-			
-			// FASTEST:
-			/*
-			 * SELECT v.id, st_astext(v.geom_vertex), st_distance_sphere(v.geom_vertex, st_geomfromtext('POINT(8.901501 47.695603)')) as dist
-			 * FROM de_2po_vertex as v
-			 * ORDER BY v.geom_vertex <-> st_geomfromtext('POINT(8.901501 47.695603)')
-			 * LIMIT 1;
-			 */
-			
-			else if (TYPE.equals(Starter.Type.BIGGIS.name())) {
-				// TEST dataset
-				st = DBConnection.getConnection(TYPE, false).prepareStatement(""
-						+ "SELECT v.id, st_astext(v.geom_vertex) "
-						+ "FROM de_2po_vertex as v "
-						+ "ORDER BY v.geom_vertex <-> st_setsrid(st_geomfromtext('POINT("+scene.getLon()+" "+scene.getLat()+")'), 4326) "
-						+ "LIMIT 1;");
-//				st = DBConnection.getConnection(TYPE, false).prepareStatement(""
-//						+ "SELECT v.id, st_astext(v.the_geom) "
-//						+ "FROM de_2po_4pgr_network_vertices_pgr as v "
-//						+ "ORDER BY v.the_geom <-> st_setsrid(st_geomfromtext('POINT("+scene.getLon()+" "+scene.getLat()+")'), 4326) "
-//						+ "LIMIT 1;");
-			}
-			else {
-				System.out.println("Find nearest WayPoint Statement --> NULL POINTER \t TYPE:"+TYPE);
-				return -1;
-			}
-			
-			ResultSet rs = st.executeQuery();
-			long id = 0;
-			while(rs.next()) {
-				id = rs.getLong(1);
-			}
-			st.close();
-			rs.close();
-			
-			return id;
-		} catch (SQLException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-		return 0;
+		return getNearestVertex(scene.getLon(), scene.getLat());
 	}
 
-//	private long getNearestWayPointID(MapMarkerDot dot) {
-//		try {
-//			PreparedStatement st = DBConnection.getConnection().prepareStatement("SELECT n.id, st_astext(n.geom), "
-//					+ "st_distance_sphere(n.geom, st_geomfromtext('POINT("+dot.getLon()+" "+dot.getLat()+")')) as dist "
-//					+ "FROM nodes as n, way_nodes as w "
-//					+ "where n.id = w.node_id "
-//					+ "order by dist "
-//					+ "limit 1;");
-//			
-////			System.out.println(st.toString());
-//			
-//			ResultSet rs = st.executeQuery();
-//			long id = 0;
-//			while(rs.next()) {
-//				id = rs.getLong(1);
-//			}
-//			st.close();
-//			rs.close();
-//			
-//			return id;
-//		} catch (SQLException e) {
-//			// TODO Auto-generated catch block
-//			e.printStackTrace();
-//		}
-//		return 0;
-//	}
 	
 	private double calculatePressureLoss() {
 		int lines = Settings.getInstance().getNumberOfLines();
